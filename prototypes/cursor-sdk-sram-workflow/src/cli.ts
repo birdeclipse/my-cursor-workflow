@@ -38,6 +38,7 @@ import { defaultHumanIntent, loadHumanIntentRequirements } from "./human-intent/
 import { resolveHumanIntent, type ResolvedHumanIntentContext } from "./human-intent/resolve.js";
 import { writeHumanIntentArtifacts } from "./human-intent/write.js";
 import type { HumanIntentSource, ResolvedHumanIntent } from "./human-intent/schema.js";
+import { runTuiChatSession } from "./tui/session.js";
 
 interface CommonOptions {
   repoRoot?: string;
@@ -333,6 +334,36 @@ const agentRunCmd = program
   .option("--interactive", "Resolve ambiguous macro selection interactively in the terminal")
   .argument("[macro]", "SRAM22 macro name (default when no requirements macro is set)", DEFAULT_MACRO);
 
+const chatCmd = program
+  .command("chat")
+  .description("Start a minimal interactive TUI chat session with SDK streaming and clarification loops.")
+  .option("--requirements <path>", "YAML/JSON human flow requirements loaded before extraction")
+  .option("--interactive", "Resolve ambiguous macro selection interactively in the terminal")
+  .argument("[macro]", "SRAM22 macro name (default when no requirements macro is set)", DEFAULT_MACRO);
+
+function buildTuiInitialPrompt(spec: StructuredSramSpec, artifacts: EmittedArtifacts, intent: ResolvedHumanIntent): string {
+  return `You are assisting an SRAM workflow operator in an interactive terminal session.
+
+Context:
+- Macro: ${spec.macro.name}
+- Run directory: ${artifacts.runDir}
+- Designer goal: ${intent.designerGoal}
+- EDA targets: ${intent.edaTargets.join(", ")}
+- Verification priorities: ${intent.verification.priority.join(", ")}
+
+Rules:
+1. Ask clarification whenever requirements or key decisions are ambiguous.
+2. For required clarification, output this exact machine block:
+CLARIFICATION_REQUEST:
+question: <single concise question>
+choices: <choice1>|<choice2>|...
+required: true
+3. For optional clarification, set required to false.
+4. Keep every response concise and source-backed.
+
+Start by briefly summarizing what you understand and list the next decisions that may need user confirmation.`;
+}
+
 agentRunCmd.action(async (macro: string) => {
   const apiKey = process.env.CURSOR_API_KEY;
   if (apiKey === undefined || apiKey.trim() === "") {
@@ -418,6 +449,53 @@ agentRunCmd.action(async (macro: string) => {
       2,
     )}\n`,
   );
+});
+
+chatCmd.action(async (macro: string) => {
+  const apiKey = process.env.CURSOR_API_KEY;
+  if (apiKey === undefined || apiKey.trim() === "") {
+    throw new Error("CURSOR_API_KEY is required for chat.");
+  }
+  const globalOpts = program.opts<CommonOptions>();
+  const chatOpts = chatCmd.opts<{ requirements?: string; interactive?: boolean }>();
+  const paths = resolvePaths(globalOpts);
+  const discovered = await DEFAULT_SRAM_SOURCE_ADAPTER.discover(paths.macrosRoot);
+  const loaded =
+    chatOpts.requirements !== undefined
+      ? await loadHumanIntentRequirements(path.resolve(chatOpts.requirements))
+      : defaultHumanIntent(macro);
+  const resolvedCtx = await resolveHumanIntent({
+    loaded,
+    discovered,
+    interactive: chatOpts.interactive === true,
+  });
+  const spec = await DEFAULT_SRAM_SOURCE_ADAPTER.extract(resolvedCtx.selectedMacro, { repoRoot: paths.repoRoot });
+  const adapters = selectEdaFlowAdapters(resolvedCtx.intent.edaTargets);
+  let artifacts = await emitWorkflowArtifacts({
+    spec,
+    outputRoot: paths.outputRoot,
+    runId: paths.runId,
+    repoRoot: paths.repoRoot,
+    edaAdapters: adapters,
+  });
+  const intentSource = mergeHumanIntentSource(loaded.source, resolvedCtx);
+  const humanPaths = await writeHumanIntentArtifacts({
+    runDir: artifacts.runDir,
+    intent: resolvedCtx.intent,
+    source: intentSource,
+  });
+  artifacts = {
+    ...artifacts,
+    humanIntentJson: humanPaths.intentJson,
+    humanIntentSourceJson: humanPaths.sourceJson,
+  };
+
+  await runTuiChatSession({
+    apiKey,
+    cwd: paths.repoRoot,
+    eventLogPath: path.join(artifacts.runDir, "chat-events.jsonl"),
+    initialPrompt: buildTuiInitialPrompt(spec, artifacts, resolvedCtx.intent),
+  });
 });
 
 const flowQualityCmd = program

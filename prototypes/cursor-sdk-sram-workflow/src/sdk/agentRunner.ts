@@ -5,7 +5,7 @@ import type { ConvergenceDecision } from "../verification-collateral/schema.js";
 
 export const CURSOR_SDK_MODEL_ID = "composer-2";
 
-type WorkflowPhase =
+export type WorkflowPhase =
   | "planning"
   | "verification-collateral"
   | "spec-intention-extraction"
@@ -13,7 +13,7 @@ type WorkflowPhase =
   | "spec-review"
   | "review";
 
-interface WorkflowEvent {
+export interface WorkflowEvent {
   type: string;
   message?: {
     content?: Array<{ type: string; text?: string }>;
@@ -50,6 +50,7 @@ export interface RunSdkPlanningAndReviewOptions {
   reviewPrompt: string;
   eventLogPath: string;
   convergence?: SdkConvergenceOptions;
+  onEvent?: (event: WorkflowStreamEvent) => Promise<void> | void;
   createAgent?: () => Promise<WorkflowAgent>;
 }
 
@@ -94,6 +95,17 @@ export interface SdkConvergenceResult {
   iterations: SdkConvergenceIterationResult[];
 }
 
+type WorkflowLifecycleEventType = "phase_start" | "stream_event" | "phase_end";
+
+export interface WorkflowStreamEvent {
+  phase: WorkflowPhase;
+  lifecycle: WorkflowLifecycleEventType;
+  runId?: string;
+  prompt?: string;
+  event?: WorkflowEvent;
+  result?: SdkPhaseResult;
+}
+
 function extractAssistantText(event: WorkflowEvent): string | undefined {
   const content = event.message?.content ?? [];
   return content
@@ -119,22 +131,27 @@ async function runPhase(
   phase: WorkflowPhase,
   prompt: string,
   eventLogPath: string,
+  onEvent?: (event: WorkflowStreamEvent) => Promise<void> | void,
 ): Promise<SdkPhaseResult> {
   const run = await agent.send(prompt);
+  await onEvent?.({ phase, lifecycle: "phase_start", runId: run.id, prompt });
   for await (const event of run.stream()) {
     await writeEvent(eventLogPath, phase, event);
+    await onEvent?.({ phase, lifecycle: "stream_event", runId: run.id, event });
   }
   const result = await run.wait();
   if (result.status === "error") {
     throw new Error(`Cursor SDK ${phase} run failed: ${run.id}`);
   }
   const conversation = run.supports("conversation") ? await run.conversation() : undefined;
-  return {
+  const phaseResult = {
     runId: run.id,
     status: result.status,
     result: result.result,
     conversation,
   };
+  await onEvent?.({ phase, lifecycle: "phase_end", runId: run.id, result: phaseResult });
+  return phaseResult;
 }
 
 function resolvePrompt<T extends unknown[]>(
@@ -185,6 +202,7 @@ async function runSvaConvergenceLoop(
   agent: WorkflowAgent,
   options: SdkConvergenceOptions,
   eventLogPath: string,
+  onEvent?: (event: WorkflowStreamEvent) => Promise<void> | void,
 ): Promise<SdkConvergenceResult> {
   const iterations: SdkConvergenceIterationResult[] = [];
   const findingCounts = new Map<string, number>();
@@ -197,18 +215,21 @@ async function runSvaConvergenceLoop(
       "spec-intention-extraction",
       resolvePrompt(options.intentPrompt, iteration, previousDecision),
       eventLogPath,
+      onEvent,
     );
     const proposal = await runPhase(
       agent,
       "sva-translation",
       resolvePrompt(options.translationPrompt, iteration, intent, previousDecision),
       eventLogPath,
+      onEvent,
     );
     const review = await runPhase(
       agent,
       "spec-review",
       resolvePrompt(options.reviewerPrompt, iteration, proposal, previousDecision),
       eventLogPath,
+      onEvent,
     );
     const reviewerDecision = options.decideIteration?.(iteration, { intent, proposal, review }) ?? parseDecisionFromReview(review.result);
     const blockedDecision =
@@ -228,7 +249,12 @@ async function runSvaConvergenceLoop(
   return { status: "blocked", decision, iterations };
 }
 
-async function createRealAgent(options: RunSdkPlanningAndReviewOptions): Promise<WorkflowAgent> {
+export interface CreateWorkflowAgentOptions {
+  apiKey: string;
+  cwd: string;
+}
+
+export async function createWorkflowAgent(options: CreateWorkflowAgentOptions): Promise<WorkflowAgent> {
   const sdkAgent = await Agent.create({
     apiKey: options.apiKey,
     model: { id: CURSOR_SDK_MODEL_ID },
@@ -281,22 +307,23 @@ async function createRealAgent(options: RunSdkPlanningAndReviewOptions): Promise
 export async function runSdkPlanningAndReview(
   options: RunSdkPlanningAndReviewOptions,
 ): Promise<SdkPlanningAndReviewResult> {
-  const agentFactory = options.createAgent ?? (() => createRealAgent(options));
+  const agentFactory = options.createAgent ?? (() => createWorkflowAgent(options));
   let agent: WorkflowAgent | undefined;
   try {
     agent = await agentFactory();
-    const plan = await runPhase(agent, "planning", options.planningPrompt, options.eventLogPath);
+    const plan = await runPhase(agent, "planning", options.planningPrompt, options.eventLogPath, options.onEvent);
     const verificationCollateral = await runPhase(
       agent,
       "verification-collateral",
       options.collateralPrompt,
       options.eventLogPath,
+      options.onEvent,
     );
     const convergence =
       options.convergence === undefined
         ? undefined
-        : await runSvaConvergenceLoop(agent, options.convergence, options.eventLogPath);
-    const review = await runPhase(agent, "review", options.reviewPrompt, options.eventLogPath);
+        : await runSvaConvergenceLoop(agent, options.convergence, options.eventLogPath, options.onEvent);
+    const review = await runPhase(agent, "review", options.reviewPrompt, options.eventLogPath, options.onEvent);
     return {
       agentId: agent.agentId,
       plan,

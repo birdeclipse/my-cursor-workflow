@@ -112,6 +112,7 @@ prototypes/cursor-sdk-sram-workflow/
 │   ├── human-intent/        # schema, load, resolve, write (HITL)
 │   ├── verification-collateral/  # property schema, normalize, emit (SVA convergence output)
 │   ├── sdk/                 # agentRunner (Cursor SDK), prompts
+│   ├── tui/                 # interactive terminal chat session + event renderer
 │   ├── review/              # traceability checks, flowArtifactQuality, flowSmoke
 │   └── smoke/               # OpenROAD smoke execution + reports
 ├── examples/
@@ -132,6 +133,7 @@ All scripts are defined in the **repo root** `package.json` and point at `protot
 | `npm run flow:quality -- <run-id> [--write]` | No | Re-analyze `outputs/<run-id>` static quality; `--write` refreshes iteration markdown |
 | `npm run smoke-run -- <run-id>` | No | Bounded OpenROAD smoke attempt + exec report |
 | `npm run agent:run -- [macro] [--run-id <id>] [--requirements <path>] [--interactive]` | **Yes** | Extract + emit + Cursor SDK (planning, collateral, **SVA convergence**, review) + convergence artifacts |
+| `npm run chat -- [macro] [--run-id <id>] [--requirements <path>] [--interactive]` | **Yes** | Interactive TUI chat loop with streamed tool calls and clarification handling |
 
 **HITL examples**
 
@@ -145,7 +147,23 @@ npm run agent:run -- --requirements prototypes/cursor-sdk-sram-workflow/examples
 
 # Ambiguous macro selection: add --interactive to pick from the terminal
 npm run agent:run -- --requirements ./my-intent.yaml --interactive --run-id my-run
+
+# Interactive TUI session with SDK streaming + clarification prompts
+npm run chat -- --requirements ./my-intent.yaml --interactive --run-id my-chat
 ```
+
+### Clarification protocol in TUI chat
+
+When the agent needs a required/optional decision, it emits:
+
+```text
+CLARIFICATION_REQUEST:
+question: <single concise question>
+choices: <choice1>|<choice2>|...
+required: true|false
+```
+
+The TUI pauses, prompts the user, and sends the answer back into the same agent conversation.
 
 **Typical outputs** (`outputs/<run-id>/`)
 

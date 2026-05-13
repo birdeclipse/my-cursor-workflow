@@ -69,6 +69,56 @@ describe("Cursor SDK orchestration", () => {
     }
   });
 
+  test("emits lifecycle callbacks for streamed events", async () => {
+    const outputRoot = await mkdtemp(path.join(os.tmpdir(), "sram-agent-"));
+    const eventLogPath = path.join(outputRoot, "agent-events.jsonl");
+    const callbacks: string[] = [];
+    try {
+      await runSdkPlanningAndReview({
+        apiKey: "test-key",
+        cwd: process.cwd(),
+        planningPrompt: "plan prompt",
+        collateralPrompt: "collateral prompt",
+        reviewPrompt: "review prompt",
+        eventLogPath,
+        onEvent(event) {
+          callbacks.push(`${event.phase}:${event.lifecycle}`);
+        },
+        createAgent: async () => ({
+          agentId: "agent-test",
+          async send() {
+            return {
+              id: "run-callback",
+              agentId: "agent-test",
+              async *stream() {
+                yield { type: "assistant", message: { content: [{ type: "text", text: "hello" }] } };
+                yield { type: "tool_call", name: "Read", status: "completed" };
+              },
+              async wait() {
+                return { status: "finished", result: "ok" };
+              },
+              supports() {
+                return false;
+              },
+              async conversation() {
+                return [];
+              },
+            };
+          },
+          async [Symbol.asyncDispose]() {},
+        }),
+      });
+
+      expect(callbacks).toContain("planning:phase_start");
+      expect(callbacks).toContain("planning:stream_event");
+      expect(callbacks).toContain("planning:phase_end");
+      expect(callbacks).toContain("verification-collateral:phase_start");
+      expect(callbacks).toContain("review:phase_end");
+    } finally {
+      await rm(outputRoot, { recursive: true, force: true });
+    }
+  });
+
   test("runs convergence prompts in role order and stops on accept", async () => {
     const outputRoot = await mkdtemp(path.join(os.tmpdir(), "sram-agent-"));
     const eventLogPath = path.join(outputRoot, "agent-events.jsonl");
