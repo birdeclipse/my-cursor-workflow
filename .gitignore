@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+
+# Build and test outputs
+dist/
+coverage/
+outputs/
+
+# Local data mirrors and large third-party references
+data/
+
+# OS/editor noise
+.DS_Store
+*.log
+*.tmp
+*.swp
+.cursor/
+.claude/
+
+# Env files
+.env
+.env.*
+!.env.example

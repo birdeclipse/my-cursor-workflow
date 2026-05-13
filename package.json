@@ -1,0 +1,32 @@
+{
+  "name": "sram-spec-to-workflow",
+  "version": "1.0.0",
+  "description": "Cursor SDK prototype for extracting SRAM macro specs and emitting EDA flow setup files.",
+  "main": "prototypes/cursor-sdk-sram-workflow/src/cli.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "demo:extract": "tsx prototypes/cursor-sdk-sram-workflow/src/cli.ts extract",
+    "demo:extract-all": "tsx prototypes/cursor-sdk-sram-workflow/src/cli.ts extract --all --summary",
+    "flow:quality": "tsx prototypes/cursor-sdk-sram-workflow/src/cli.ts flow-quality",
+    "smoke-run": "tsx prototypes/cursor-sdk-sram-workflow/src/cli.ts smoke-run",
+    "discover": "tsx prototypes/cursor-sdk-sram-workflow/src/cli.ts discover",
+    "agent:run": "tsx prototypes/cursor-sdk-sram-workflow/src/cli.ts agent-run"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "Apache-2.0",
+  "type": "module",
+  "dependencies": {
+    "@cursor/sdk": "^1.0.12",
+    "commander": "^14.0.3",
+    "yaml": "^2.9.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^25.7.0",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.6"
+  }
+}
